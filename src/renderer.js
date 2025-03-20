@@ -1,11 +1,11 @@
 document.addEventListener('DOMContentLoaded', () => {
   const urlInput = document.getElementById('gameUrl');
-  const selectorInput = document.getElementById('downloadSelector'); // Adicione este campo no seu HTML
+  const selectorInput = document.getElementById('downloadSelector'); 
   const downloadBtn = document.getElementById('downloadBtn');
   const statusDiv = document.getElementById('status');
   
   downloadBtn.addEventListener('click', async () => {
-    const url = urlInput.value.trim();
+    const url = urlInput.value.trim(); //pega a url
     const selector = selectorInput ? selectorInput.value.trim() : ''; // Opcional
     
     if (!url) {

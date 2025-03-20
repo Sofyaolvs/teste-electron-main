@@ -4,10 +4,9 @@ const fs = require('fs');
 const puppeteer = require('puppeteer');
 const AdmZip = require('adm-zip');
 
-// Verificar se está em produção
 const isProduction = app.isPackaged;
 
-// Função para criar a janela principal
+// cria uma janela principal
 function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 800,
@@ -19,16 +18,12 @@ function createWindow() {
     }
   });
 
-  // Carregar o arquivo HTML
+  // arquivo html
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
-  // Abrir DevTools em desenvolvimento
-  if (!isProduction) {
-    mainWindow.webContents.openDevTools();
-  }
 }
 
-// Criar a janela quando o app estiver pronto
+// cria a janela qnd o app estiver pronto
 app.whenReady().then(() => {
   createWindow();
 
@@ -42,38 +37,40 @@ app.on('window-all-closed', function () {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Função para baixar jogo usando Puppeteer
+// funcção p baixar jogo usando Puppeteer
 ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) => {
   let browser = null;
   try {
+    //caminho p pasta temporaria, gera o nome unico p diretorio
     const tempDir = path.join(app.getPath('temp'), 'game-download-' + Date.now());
-    const downloadsDir = app.getPath('downloads');
+    const downloadsDir = app.getPath('downloads'); //caminho da pasta 
     
-    // Criar diretório temporário se não existir
+    //ve seja existe 
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
     
-    // Configuração do Puppeteer - Usar headless: true para não mostrar o navegador
+    // puppeteer
+    //se estiver rodando em prod é executado sem interface grafica
     browser = await puppeteer.launch({
       headless: isProduction ? true : false, // Headless em produção, visível apenas em desenvolvimento
       defaultViewport: null,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
     
-    // Configurar o diretório de downloads
+    // cria nova aba no nav
     const page = await browser.newPage();
     
     // Configurar onde os downloads serão salvos
-    const client = await page.target().createCDPSession();
-    await client.send('Page.setDownloadBehavior', {
-      behavior: 'allow',
-      downloadPath: tempDir
+    const client = await page.target().createCDPSession(); //sessão do prot devTools p ter controle sob o nav
+    await client.send('Page.setDownloadBehavior', { //config o comportamento de download da pag
+      behavior: 'allow', //download automatico sem interaão do usuário
+      downloadPath: tempDir //pasta q os arq serão baixados
     });
     
-    // Navegar para a URL
+    // Navegar p URL
     await page.goto(url, { waitUntil: 'networkidle2' });
-    console.log(`Navegou para: ${url}`);
+    // console.log(`Navegou para: ${url}`);
     
     // Clicar no botão de download
     // Melhorar seletores comuns e torná-los mais específicos
@@ -87,18 +84,19 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
       'a.btn-download, ' +
       'button.download';
     
-    console.log(`Procurando pelo botão de download usando seletor: ${seletor}`);
+    // console.log(`Procurando pelo botão de download usando seletor: ${seletor}`);
     
-    // Tentar encontrar o elemento com mais paciência
+    // Tentar encontrar o elemento 
     try {
-      await page.waitForSelector(seletor, { visible: true, timeout: 30000 });
+      await page.waitForSelector(seletor, { visible: true, timeout: 2000 });
     } catch (error) {
       console.log('Seletor não encontrado, tentando avaliação de página...');
       
       // Se o seletor não for encontrado, tente encontrar links que pareçam ser de download
-      const downloadLinks = await page.evaluate(() => {
-        const links = Array.from(document.querySelectorAll('a'));
+      const downloadLinks = await page.evaluate(() => { 
+        const links = Array.from(document.querySelectorAll('a'));//acessa o dom da pagina p achar o botão
         return links
+        //verifica se o link parece um link de download
           .filter(link => {
             const href = link.href.toLowerCase();
             const text = link.innerText.toLowerCase();
@@ -109,6 +107,7 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
                    link.offsetWidth > 0 && 
                    link.offsetHeight > 0;
           })
+          //cria um array com + detalhes sobre os links(pode ser retirado nn é necessário porem bom p verificar)
           .map((link, index) => ({
             index,
             href: link.href,
@@ -117,26 +116,25 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
           }));
       });
       
-      console.log('Possíveis links de download encontrados:', downloadLinks);
+      // console.log('Possíveis links de download encontrados:', downloadLinks);
       
       if (downloadLinks.length > 0) {
-        // Clique no primeiro link encontrado
+        // clica no primeiro link encontrado
         await page.click(`a[href="${downloadLinks[0].href}"]`);
       } else {
         throw new Error('Não foi possível encontrar o botão de download');
       }
     }
     
-    // Clicar no botão e esperar pelo download iniciar (se o seletor foi encontrado normalmente)
+    // clica no botão e espera pelo download se o botao foi achado
     if (await page.$(seletor)) {
       await Promise.all([
         page.click(seletor),
-        // Esperar um pouco para o download começar
-        new Promise(resolve => setTimeout(resolve, 5000))
+        new Promise(resolve => setTimeout(resolve, 2000))
       ]);
     }
     
-    console.log('Clicou no botão de download, aguardando download...');
+    // console.log('Clicou no botão de download, aguardando download...');
     
     // Esperar alguns segundos para garantir que o download foi iniciado
     await new Promise(resolve => setTimeout(resolve, 10000));
@@ -149,11 +147,11 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
       throw new Error('Nenhum arquivo foi baixado');
     }
     
-    // Pegar o arquivo baixado (presumindo que seja o primeiro da lista)
+    // Pega o arquivo baixado 
     const downloadedFile = files[0];
     const filePath = path.join(tempDir, downloadedFile);
     
-    // Esperar até que o arquivo esteja completamente baixado (não tenha extensão .crdownload ou .part)
+    // Espera até que o arquivo esteja completamente baixado 
     let fileIsReady = !downloadedFile.endsWith('.crdownload') && !downloadedFile.endsWith('.part');
     let attempts = 0;
     const maxAttempts = 60; // 5 minutos (60 x 5s)
@@ -165,7 +163,7 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
       // Verificar se algum arquivo tem extensão .crdownload ou .part
       const pendingFiles = currentFiles.filter(f => f.endsWith('.crdownload') || f.endsWith('.part'));
       fileIsReady = pendingFiles.length === 0 && currentFiles.length > 0;
-      
+      //tentativas (60 de 5s)
       attempts++;
       console.log(`Verificando download... Tentativa ${attempts}/${maxAttempts}`);
     }
@@ -174,13 +172,13 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
       throw new Error('Tempo esgotado esperando o download completar');
     }
     
-    // Criar o ZIP com o arquivo baixado
+    // cria um zip qnd baixar
     const finalFiles = fs.readdirSync(tempDir);
     if (finalFiles.length === 0) {
       throw new Error('Nenhum arquivo foi baixado');
     }
     
-    // Encontrar arquivos executáveis
+    // Encontra arquivos exe
     const exeFiles = finalFiles.filter(f => f.endsWith('.exe'));
     const targetFile = exeFiles.length > 0 ? exeFiles[0] : finalFiles[0];
     const targetPath = path.join(tempDir, targetFile);
