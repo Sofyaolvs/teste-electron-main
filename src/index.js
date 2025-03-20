@@ -53,35 +53,68 @@ ipcMain.handle('download-game', async (event, url) => {
       fs.mkdirSync(tempDir, { recursive: true });
     }
     
-    // Extrair nome do jogo da URL (exemplo básico)
-    const gameName = url.split('/').pop().split('?')[0] || 'game-download'
+    // Extrair nome do jogo da URL
+    const gameName = url.split('/').pop().split('?')[0] || 'game-download';
     
     // Caminho para o arquivo ZIP final
     const zipPath = path.join(downloadsDir, `${gameName}.zip`);
     
-    // Baixar arquivo
-    const response = await fetch(url);
+    console.log(`Iniciando download de: ${url}`);
+    
+    // Usar opção redirect: 'follow' para seguir redirecionamentos
+    const response = await fetch(url, {
+      redirect: 'follow', // Isso é importante para seguir redirecionamentos
+      headers: {
+        // Adicionar um user-agent para simular um navegador
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
     
     if (!response.ok) {
       throw new Error(`Falha no download: ${response.statusText}`);
     }
     
+    // Verificar se o content-type é compatível com um arquivo executável
+    const contentType = response.headers.get('content-type');
+    console.log(`Content-Type recebido: ${contentType}`);
+    
+    // Se o content-type for text/html, provavelmente não é o executável
+    if (contentType && contentType.includes('text/html')) {
+      throw new Error('O URL fornecido não aponta para um arquivo executável, mas para uma página web');
+    }
+    
+    // Pegar o nome do arquivo do header Content-Disposition, se disponível
+    const contentDisposition = response.headers.get('content-disposition');
+    let fileName = gameName;
+    
+    if (contentDisposition) {
+      const fileNameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+      if (fileNameMatch && fileNameMatch[1]) {
+        fileName = fileNameMatch[1].replace(/['"]/g, '');
+        console.log(`Nome do arquivo detectado no header: ${fileName}`);
+      }
+    }
+    
     // Caminho para o arquivo temporário
-    const filePath = path.join(tempDir, gameName);
+    const filePath = path.join(tempDir, fileName);
     
-    // Salvar o conteúdo do download em um arquivo
-    const fileStream = fs.createWriteStream(filePath);
-    response.body.pipe(fileStream);
+    // Converter a resposta em um buffer
+    const buffer = await response.buffer();
     
-    // Aguardar o fim do download
-    await new Promise((resolve, reject) => {
-      fileStream.on('finish', resolve);
-      fileStream.on('error', reject);
-    });
+    // Verificar se os primeiros bytes parecem ser de um arquivo executável Windows
+    // "MZ" é a assinatura de arquivos .exe
+    if (buffer.length > 2 && buffer[0] === 0x4D && buffer[1] === 0x5A) {
+      console.log('Arquivo parece ser um executável Windows válido');
+    } else {
+      console.log('Aviso: Arquivo não parece ser um executável Windows');
+    }
+    
+    // Salvar o buffer em um arquivo
+    fs.writeFileSync(filePath, buffer);
     
     // Criar ZIP com o arquivo baixado
     const zip = new AdmZip();
-    zip.addLocalFile(filePath, '', gameName);
+    zip.addLocalFile(filePath, '', fileName);
     zip.writeZip(zipPath);
     
     // Limpar diretório temporário
