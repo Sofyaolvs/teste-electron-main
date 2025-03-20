@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const fetch = require('node-fetch');
+const puppeteer = require('puppeteer');
 const AdmZip = require('adm-zip');
 
 // Verificar se está em produção
@@ -42,8 +42,9 @@ app.on('window-all-closed', function () {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Lidar com o download do jogo
-ipcMain.handle('download-game', async (event, url) => {
+// Função para baixar jogo usando Puppeteer
+ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) => {
+  let browser = null;
   try {
     const tempDir = path.join(app.getPath('temp'), 'game-download-' + Date.now());
     const downloadsDir = app.getPath('downloads');
@@ -53,69 +54,101 @@ ipcMain.handle('download-game', async (event, url) => {
       fs.mkdirSync(tempDir, { recursive: true });
     }
     
-    // Extrair nome do jogo da URL
-    const gameName = url.split('/').pop().split('?')[0] || 'game-download';
-    
-    // Caminho para o arquivo ZIP final
-    const zipPath = path.join(downloadsDir, `${gameName}.zip`);
-    
-    console.log(`Iniciando download de: ${url}`);
-    
-    // Usar opção redirect: 'follow' para seguir redirecionamentos
-    const response = await fetch(url, {
-      redirect: 'follow', // Isso é importante para seguir redirecionamentos
-      headers: {
-        // Adicionar um user-agent para simular um navegador
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
+    // Configuração do Puppeteer
+    browser = await puppeteer.launch({
+      headless: false, // false para visualizar o que está acontecendo, mude para true em produção
+      defaultViewport: null,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
     
-    if (!response.ok) {
-      throw new Error(`Falha no download: ${response.statusText}`);
+    // Configurar o diretório de downloads
+    const page = await browser.newPage();
+    
+    // Configurar onde os downloads serão salvos
+    const client = await page.target().createCDPSession();
+    await client.send('Page.setDownloadBehavior', {
+      behavior: 'allow',
+      downloadPath: tempDir
+    });
+    
+    // Navegar para a URL
+    await page.goto(url, { waitUntil: 'networkidle2' });
+    console.log(`Navegou para: ${url}`);
+    
+    // Clicar no botão de download (este seletor deve ser ajustado conforme o site)
+    // Se não for fornecido um seletor, tentaremos alguns seletores comuns
+    const seletor = selectorDoButaoDeDownload || 'a[href*=".exe"], button:contains("Download"), .download-button, #download-button';
+    
+    console.log(`Procurando pelo botão de download usando seletor: ${seletor}`);
+    await page.waitForSelector(seletor, { visible: true, timeout: 30000 });
+    
+    // Clicar no botão e esperar pelo download iniciar
+    await Promise.all([
+      page.click(seletor),
+      // Esperar um pouco para o download começar
+      new Promise(resolve => setTimeout(resolve, 5000))
+    ]);
+    
+    console.log('Clicou no botão de download, aguardando download...');
+    
+    // Esperar alguns segundos para garantir que o download foi iniciado
+    await new Promise(resolve => setTimeout(resolve, 10000));
+    
+    // Verificar quais arquivos foram baixados
+    const files = fs.readdirSync(tempDir);
+    console.log('Arquivos encontrados:', files);
+    
+    if (files.length === 0) {
+      throw new Error('Nenhum arquivo foi baixado');
     }
     
-    // Verificar se o content-type é compatível com um arquivo executável
-    const contentType = response.headers.get('content-type');
-    console.log(`Content-Type recebido: ${contentType}`);
+    // Pegar o arquivo baixado (presumindo que seja o primeiro da lista)
+    const downloadedFile = files[0];
+    const filePath = path.join(tempDir, downloadedFile);
     
-    // Se o content-type for text/html, provavelmente não é o executável
-    if (contentType && contentType.includes('text/html')) {
-      throw new Error('O URL fornecido não aponta para um arquivo executável, mas para uma página web');
+    // Esperar até que o arquivo esteja completamente baixado (não tenha extensão .crdownload ou .part)
+    let fileIsReady = !downloadedFile.endsWith('.crdownload') && !downloadedFile.endsWith('.part');
+    let attempts = 0;
+    const maxAttempts = 60; // 5 minutos (60 x 5s)
+    
+    while (!fileIsReady && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Esperar 5 segundos
+      const currentFiles = fs.readdirSync(tempDir);
+      
+      // Verificar se algum arquivo tem extensão .crdownload ou .part
+      const pendingFiles = currentFiles.filter(f => f.endsWith('.crdownload') || f.endsWith('.part'));
+      fileIsReady = pendingFiles.length === 0 && currentFiles.length > 0;
+      
+      attempts++;
+      console.log(`Verificando download... Tentativa ${attempts}/${maxAttempts}`);
     }
     
-    // Pegar o nome do arquivo do header Content-Disposition, se disponível
-    const contentDisposition = response.headers.get('content-disposition');
-    let fileName = gameName;
-    
-    if (contentDisposition) {
-      const fileNameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-      if (fileNameMatch && fileNameMatch[1]) {
-        fileName = fileNameMatch[1].replace(/['"]/g, '');
-        console.log(`Nome do arquivo detectado no header: ${fileName}`);
-      }
+    if (!fileIsReady) {
+      throw new Error('Tempo esgotado esperando o download completar');
     }
     
-    // Caminho para o arquivo temporário
-    const filePath = path.join(tempDir, fileName);
-    
-    // Converter a resposta em um buffer
-    const buffer = await response.buffer();
-    
-    // Verificar se os primeiros bytes parecem ser de um arquivo executável Windows
-    // "MZ" é a assinatura de arquivos .exe
-    if (buffer.length > 2 && buffer[0] === 0x4D && buffer[1] === 0x5A) {
-      console.log('Arquivo parece ser um executável Windows válido');
-    } else {
-      console.log('Aviso: Arquivo não parece ser um executável Windows');
+    // Criar o ZIP com o arquivo baixado
+    const finalFiles = fs.readdirSync(tempDir);
+    if (finalFiles.length === 0) {
+      throw new Error('Nenhum arquivo foi baixado');
     }
     
-    // Salvar o buffer em um arquivo
-    fs.writeFileSync(filePath, buffer);
+    // Encontrar arquivos executáveis
+    const exeFiles = finalFiles.filter(f => f.endsWith('.exe'));
+    const targetFile = exeFiles.length > 0 ? exeFiles[0] : finalFiles[0];
+    const targetPath = path.join(tempDir, targetFile);
+    
+    // Caminho para o arquivo ZIP final
+    const zipPath = path.join(downloadsDir, `${targetFile}.zip`);
     
     // Criar ZIP com o arquivo baixado
     const zip = new AdmZip();
-    zip.addLocalFile(filePath, '', fileName);
+    zip.addLocalFile(targetPath, '', targetFile);
     zip.writeZip(zipPath);
+    
+    // Fechar o navegador
+    await browser.close();
+    browser = null;
     
     // Limpar diretório temporário
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -123,10 +156,21 @@ ipcMain.handle('download-game', async (event, url) => {
     return {
       success: true,
       message: 'Download concluído com sucesso',
-      path: zipPath
+      path: zipPath,
+      fileName: targetFile
     };
   } catch (error) {
     console.error('Erro no download:', error);
+    
+    // Tentar fechar o navegador se ainda estiver aberto
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (e) {
+        console.error('Erro ao fechar o navegador:', e);
+      }
+    }
+    
     return {
       success: false,
       message: `Erro: ${error.message}`
