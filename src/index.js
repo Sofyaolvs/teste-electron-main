@@ -54,9 +54,9 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
       fs.mkdirSync(tempDir, { recursive: true });
     }
     
-    // Configuração do Puppeteer
+    // Configuração do Puppeteer - Usar headless: true para não mostrar o navegador
     browser = await puppeteer.launch({
-      headless: false, // false para visualizar o que está acontecendo, mude para true em produção
+      headless: isProduction ? true : false, // Headless em produção, visível apenas em desenvolvimento
       defaultViewport: null,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
@@ -75,19 +75,66 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
     await page.goto(url, { waitUntil: 'networkidle2' });
     console.log(`Navegou para: ${url}`);
     
-    // Clicar no botão de download (este seletor deve ser ajustado conforme o site)
-    // Se não for fornecido um seletor, tentaremos alguns seletores comuns
-    const seletor = selectorDoButaoDeDownload || 'a[href*=".exe"], button:contains("Download"), .download-button, #download-button';
+    // Clicar no botão de download
+    // Melhorar seletores comuns e torná-los mais específicos
+    const seletor = selectorDoButaoDeDownload || 
+      'a[href*=".exe"], ' + 
+      'a[download], ' +
+      'button:contains("Download"), ' + 
+      '.download-button, ' + 
+      '#download-button, ' +
+      'a:contains("Download"), ' +
+      'a.btn-download, ' +
+      'button.download';
     
     console.log(`Procurando pelo botão de download usando seletor: ${seletor}`);
-    await page.waitForSelector(seletor, { visible: true, timeout: 30000 });
     
-    // Clicar no botão e esperar pelo download iniciar
-    await Promise.all([
-      page.click(seletor),
-      // Esperar um pouco para o download começar
-      new Promise(resolve => setTimeout(resolve, 5000))
-    ]);
+    // Tentar encontrar o elemento com mais paciência
+    try {
+      await page.waitForSelector(seletor, { visible: true, timeout: 30000 });
+    } catch (error) {
+      console.log('Seletor não encontrado, tentando avaliação de página...');
+      
+      // Se o seletor não for encontrado, tente encontrar links que pareçam ser de download
+      const downloadLinks = await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('a'));
+        return links
+          .filter(link => {
+            const href = link.href.toLowerCase();
+            const text = link.innerText.toLowerCase();
+            return (href.includes('.exe') || 
+                   href.includes('download') || 
+                   href.includes('.zip') || 
+                   text.includes('download')) &&
+                   link.offsetWidth > 0 && 
+                   link.offsetHeight > 0;
+          })
+          .map((link, index) => ({
+            index,
+            href: link.href,
+            text: link.innerText,
+            position: link.getBoundingClientRect()
+          }));
+      });
+      
+      console.log('Possíveis links de download encontrados:', downloadLinks);
+      
+      if (downloadLinks.length > 0) {
+        // Clique no primeiro link encontrado
+        await page.click(`a[href="${downloadLinks[0].href}"]`);
+      } else {
+        throw new Error('Não foi possível encontrar o botão de download');
+      }
+    }
+    
+    // Clicar no botão e esperar pelo download iniciar (se o seletor foi encontrado normalmente)
+    if (await page.$(seletor)) {
+      await Promise.all([
+        page.click(seletor),
+        // Esperar um pouco para o download começar
+        new Promise(resolve => setTimeout(resolve, 5000))
+      ]);
+    }
     
     console.log('Clicou no botão de download, aguardando download...');
     
