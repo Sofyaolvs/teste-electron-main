@@ -72,17 +72,15 @@ ipcMain.handle('download-game', async (event, url) => {
     
     // Seletores aprimorados para detecção automática de botões de download
     const seletor = 
-      'a[href*=".exe"], ' + 
-      'a[download], ' +
-      'button:contains("Download"), ' + 
-      '.download-button, ' + 
-      '#download-button, ' +
-      'a:contains("Download"), ' +
-      'a.btn-download, ' +
-      'button.download, ' +
-      'a[href*=".zip"], ' +
-      'a[href*=".msi"], ' +
-      'a[href*="download"]';
+  'a[href*=".exe"], ' + 
+  'a[download], ' +
+  '.download-button, ' + 
+  '#download-button, ' +
+  'a.btn-download, ' +
+  'button.download, ' +
+  'a[href*=".zip"], ' +
+  'a[href*=".msi"], ' +
+  'a[href*="download"]';
     
     console.log(`Procurando pelo botão de download usando seletor: ${seletor}`);
     
@@ -102,13 +100,13 @@ ipcMain.handle('download-game', async (event, url) => {
             const href = (link.href || '').toLowerCase();
             const text = (link.innerText || '').toLowerCase();
             return (href.includes('.exe') || 
-                   href.includes('download') || 
+                   href.includes('Download') || 
                    href.includes('.zip') || 
-                   href.includes('.msi') ||
-                   href.includes('.rar') ||
-                   href.includes('get') ||
+                  //  href.includes('.msi') ||
+                  //  href.includes('.rar') ||
+                  //  href.includes('get') ||
                    text.includes('download') ||
-                   text.includes('get') ||
+                  //  text.includes('get') ||
                    text.includes('install')) &&
                    link.offsetWidth > 0 && 
                    link.offsetHeight > 0;
@@ -137,10 +135,11 @@ ipcMain.handle('download-game', async (event, url) => {
           
           if (href.includes('.exe')) score += 5;
           if (href.includes('.zip')) score += 4;
-          if (href.includes('.msi')) score += 4;
+          // if (href.includes('.msi')) score += 4;
           if (text.includes('download now')) score += 3;
-          if (text.includes('download')) score += 2;
-          if (href.includes('download')) score += 2;
+          if (text.includes('Download')) score += 2;
+          if(text.includes('Download Now')) score += 2
+          // if (href.includes('download')) score += 2;
           if (link.position.y < 500) score += 1; // Links mais no topo têm prioridade
           
           if (score > bestScore) {
