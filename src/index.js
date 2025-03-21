@@ -20,7 +20,6 @@ function createWindow() {
 
   // arquivo html
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
-
 }
 
 // cria a janela qnd o app estiver pronto
@@ -38,7 +37,7 @@ app.on('window-all-closed', function () {
 });
 
 // funcção p baixar jogo usando Puppeteer
-ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) => {
+ipcMain.handle('download-game', async (event, url) => {
   let browser = null;
   try {
     //caminho p pasta temporaria, gera o nome unico p diretorio
@@ -50,10 +49,9 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
       fs.mkdirSync(tempDir, { recursive: true });
     }
     
-    // puppeteer
-    //se estiver rodando em prod é executado sem interface grafica
+    // puppeteer - sempre em modo headless (sem interface gráfica)
     browser = await puppeteer.launch({
-      headless: isProduction ? true : false, // Headless em produção, visível apenas em desenvolvimento
+      headless: 'new', // Use o novo modo headless sempre
       defaultViewport: null,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
@@ -70,11 +68,10 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
     
     // Navegar p URL
     await page.goto(url, { waitUntil: 'networkidle2' });
-    // console.log(`Navegou para: ${url}`);
+    console.log(`Navegou para: ${url}`);
     
-    // Clicar no botão de download
-    // Melhorar seletores comuns e torná-los mais específicos
-    const seletor = selectorDoButaoDeDownload || 
+    // Seletores aprimorados para detecção automática de botões de download
+    const seletor = 
       'a[href*=".exe"], ' + 
       'a[download], ' +
       'button:contains("Download"), ' + 
@@ -82,13 +79,17 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
       '#download-button, ' +
       'a:contains("Download"), ' +
       'a.btn-download, ' +
-      'button.download';
+      'button.download, ' +
+      'a[href*=".zip"], ' +
+      'a[href*=".msi"], ' +
+      'a[href*="download"]';
     
-    // console.log(`Procurando pelo botão de download usando seletor: ${seletor}`);
+    console.log(`Procurando pelo botão de download usando seletor: ${seletor}`);
     
     // Tentar encontrar o elemento 
     try {
-      await page.waitForSelector(seletor, { visible: true, timeout: 2000 });
+      await page.waitForSelector(seletor, { visible: true, timeout: 5000 });
+      console.log('Botão de download encontrado pelo seletor!');
     } catch (error) {
       console.log('Seletor não encontrado, tentando avaliação de página...');
       
@@ -98,16 +99,21 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
         return links
         //verifica se o link parece um link de download
           .filter(link => {
-            const href = link.href.toLowerCase();
-            const text = link.innerText.toLowerCase();
+            const href = (link.href || '').toLowerCase();
+            const text = (link.innerText || '').toLowerCase();
             return (href.includes('.exe') || 
                    href.includes('download') || 
                    href.includes('.zip') || 
-                   text.includes('download')) &&
+                   href.includes('.msi') ||
+                   href.includes('.rar') ||
+                   href.includes('get') ||
+                   text.includes('download') ||
+                   text.includes('get') ||
+                   text.includes('install')) &&
                    link.offsetWidth > 0 && 
                    link.offsetHeight > 0;
           })
-          //cria um array com + detalhes sobre os links(pode ser retirado nn é necessário porem bom p verificar)
+          //cria um array com + detalhes sobre os links
           .map((link, index) => ({
             index,
             href: link.href,
@@ -116,25 +122,64 @@ ipcMain.handle('download-game', async (event, url, selectorDoButaoDeDownload) =>
           }));
       });
       
-      // console.log('Possíveis links de download encontrados:', downloadLinks);
+      console.log('Possíveis links de download encontrados:', downloadLinks);
       
       if (downloadLinks.length > 0) {
-        // clica no primeiro link encontrado
-        await page.click(`a[href="${downloadLinks[0].href}"]`);
+        // Encontra o link que mais provavelmente é de download
+        // Priorizando links com palavras-chave específicas
+        let bestLinkIndex = 0;
+        let bestScore = 0;
+        
+        downloadLinks.forEach((link, index) => {
+          let score = 0;
+          const href = link.href.toLowerCase();
+          const text = link.text.toLowerCase();
+          
+          if (href.includes('.exe')) score += 5;
+          if (href.includes('.zip')) score += 4;
+          if (href.includes('.msi')) score += 4;
+          if (text.includes('download now')) score += 3;
+          if (text.includes('download')) score += 2;
+          if (href.includes('download')) score += 2;
+          if (link.position.y < 500) score += 1; // Links mais no topo têm prioridade
+          
+          if (score > bestScore) {
+            bestScore = score;
+            bestLinkIndex = index;
+          }
+        });
+        
+        // clica no melhor link encontrado
+        const bestLink = downloadLinks[bestLinkIndex];
+        console.log(`Selecionado melhor link: ${bestLink.text} (${bestLink.href})`);
+        
+        try {
+          await page.click(`a[href="${bestLink.href}"]`);
+          console.log('Clicou no link de download!');
+        } catch (clickError) {
+          console.log('Erro ao clicar no link, tentando via JavaScript:', clickError);
+          // Se não conseguir clicar diretamente, tenta via JavaScript
+          await page.evaluate((href) => {
+            const links = Array.from(document.querySelectorAll('a'));
+            const targetLink = links.find(link => link.href === href);
+            if (targetLink) targetLink.click();
+          }, bestLink.href);
+        }
       } else {
         throw new Error('Não foi possível encontrar o botão de download');
       }
     }
     
-    // clica no botão e espera pelo download se o botao foi achado
+    // clica no botão se o botão foi achado pelo seletor
     if (await page.$(seletor)) {
       await Promise.all([
         page.click(seletor),
         new Promise(resolve => setTimeout(resolve, 2000))
       ]);
+      console.log('Clicou no botão de download via seletor');
     }
     
-    // console.log('Clicou no botão de download, aguardando download...');
+    console.log('Aguardando download...');
     
     // Esperar alguns segundos para garantir que o download foi iniciado
     await new Promise(resolve => setTimeout(resolve, 10000));
